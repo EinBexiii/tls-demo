@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	CA_CERT_PATH     = "/path/to/go"
-	SERVER_CERT_PATH = "/path/to/go"
-	PRIV_KEY_PATH    = "/path/to/go"
+	CA_CERT_PATH     = "/root/certs/ca.crt"
+	SERVER_CERT_PATH = "/root/certs/server.crt"
+	PRIV_KEY_PATH    = "/root/certs/server.pem"
 
 	HOST = "127.0.0.1:443" // tls server
 
@@ -31,8 +31,8 @@ var (
 )
 
 type HandshakePacket struct {
-	packetType byte
-	data       []byte
+	PacketType byte
+	Data       []byte
 }
 
 type HandshakeSuccessPacket struct {
@@ -43,7 +43,7 @@ func main() {
 	err := startTlsServer()
 
 	if err != nil {
-		log.Panic("Failed to start TLS-Server: %v", err)
+		log.Print("Failed to start TLS-Server: %v", err)
 	}
 }
 
@@ -54,7 +54,7 @@ func startTlsServer() error {
 	valid := certPool.AppendCertsFromPEM(caCert) // check if cert is valid
 
 	if !valid {
-		log.Fatal("CaCert is not valid!")
+		log.Print("CaCert is not valid!")
 		return nil
 	}
 
@@ -62,7 +62,7 @@ func startTlsServer() error {
 	// parses private key
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return err
 	}
 
@@ -76,19 +76,19 @@ func startTlsServer() error {
 	log.Print("Listen on port 443...")
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return err
 	}
 
 	defer connection.Close()
 
-	gob.Register(ecdh.Point())
+	gob.Register(ecdh.Point{})
 
 	for {
 		tlsConn, err := connection.Accept()
 
 		if err != nil {
-			log.Fatal(err)
+			log.Print(err)
 			continue
 		}
 		go handle(tlsConn) //handle async cuz in production there are more than 1 client
@@ -104,22 +104,23 @@ func handle(connection net.Conn) {
 		_, err := connection.Read(buffer)
 
 		if err != nil {
-			log.Fatal(err)
+			log.Print("Somethig went wrong: %v", err)
 			break
 		}
 
 		packet := &HandshakePacket{}
 		_ = decode(packet, buffer)
 
-		if packet.packetType == HANDSHAKE_TYPE {
-			err := handshake(connection, packet.data)
+		if packet.PacketType == HANDSHAKE_TYPE {
+			err := handshake(connection, packet.Data)
 
 			if err != nil {
-				log.Fatal("Handshake failed: %v", err)
+				log.Print("Handshake failed: %v", err)
 				break
 			}
 
 			log.Printf("Handshake Success")
+			break
 		}
 	}
 
@@ -136,7 +137,7 @@ func handshake(connection net.Conn, data []byte) error {
 	serverPrivKey, serverPubKey, err := p256.GenerateKey(nil) // generate priv and pubkey for server, for generating master secret for client and server
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return err
 	}
 
@@ -144,7 +145,7 @@ func handshake(connection net.Conn, data []byte) error {
 
 	handshakePacketBytes, _ := encode(handshakePacket)
 
-	packet := &HandshakePacket{packetType: HANDSHAKE_SUCCESS_TYPE, data: handshakePacketBytes}
+	packet := &HandshakePacket{PacketType: HANDSHAKE_SUCCESS_TYPE, Data: handshakePacketBytes}
 
 	packetBytes, _ := encode(packet)
 
@@ -153,7 +154,7 @@ func handshake(connection net.Conn, data []byte) error {
 	SECRET = p256.ComputeSecret(serverPrivKey, clientPublicKey) // master-secret
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return err
 	}
 

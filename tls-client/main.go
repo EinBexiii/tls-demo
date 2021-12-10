@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	CA_CERT_PATH     = "/path/to/go"
-	SERVER_CERT_PATH = "/path/to/go"
-	PRIV_KEY_PATH    = "/path/to/go"
+	CA_CERT_PATH     = "/root/certs/ca.crt"
+	SERVER_CERT_PATH = "/root/certs/cert.crt"
+	PRIV_KEY_PATH    = "/root/certs/clientprivkey.pem"
 
 	HOST = "127.0.0.1:443" // tls server
 
@@ -29,8 +29,8 @@ var (
 )
 
 type HandshakePacket struct {
-	packetType byte
-	data       []byte
+	PacketType byte
+	Data       []byte
 }
 
 type HandshakeSuccessPacket struct {
@@ -53,7 +53,7 @@ func doHanshake() bool {
 	valid := certPool.AppendCertsFromPEM(caCert) // check if cert is valid
 
 	if !valid {
-		log.Fatal("CaCert is not valid!")
+		log.Print("CaCert is not valid!")
 		return false
 	}
 
@@ -61,7 +61,7 @@ func doHanshake() bool {
 	// parses private key
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return false
 	}
 
@@ -73,7 +73,7 @@ func doHanshake() bool {
 	connection, err := tls.Dial("tcp", HOST, tlsConfig)
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return false
 	}
 
@@ -84,26 +84,26 @@ func doHanshake() bool {
 	clientPrivKey, clientPubKey, err := p256.GenerateKey(nil) //generate privatekey, publickey
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return false
 	}
 
 	err = p256.Check(clientPubKey) // before we sending the pubkey to the server, we want to check if it's valid
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return false
 	}
 
 	keyBytes, _ := encode(clientPubKey) // premaster secret
 
-	packet := &HandshakePacket{packetType: HANDSHAKE_TYPE, data: keyBytes}
+	packet := &HandshakePacket{PacketType: HANDSHAKE_TYPE, Data: keyBytes}
 	encodedPacket, _ := encode(packet)
 
 	_, err = connection.Write(encodedPacket)
 
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
 		return false
 	}
 
@@ -112,28 +112,31 @@ func doHanshake() bool {
 		_, err := connection.Read(buf)
 
 		if err != nil {
-			log.Fatal(err)
+			log.Print(err)
 			return false
 		}
+
+		gob.Register(ecdh.Point{})
 
 		receivedPacket := &HandshakePacket{}
 		_ = decode(receivedPacket, buf)
 
-		if receivedPacket.packetType == HANDSHAKE_SUCCESS_TYPE {
+		if receivedPacket.PacketType == HANDSHAKE_SUCCESS_TYPE {
+			connection.Close() // close connection to avoid next read from server
+
 			handshakePacket := &HandshakeSuccessPacket{}
-			_ = decode(handshakePacket, receivedPacket.data)
+			_ = decode(handshakePacket, receivedPacket.Data)
 
 			err = p256.Check(handshakePacket.ServerPublicKey)
 
 			if err != nil {
-				log.Fatal("PublicKey is not valid!")
+				log.Print("PublicKey is not valid!")
 				return false
 			}
 
 			SECRET = p256.ComputeSecret(clientPrivKey, handshakePacket.ServerPublicKey) // master-secret
-
-			log.Printf("Handshake SUCCESS!")
-
+			log.Print("Handshake Success")
+			log.Print(SECRET)
 			return true
 
 		} else {
