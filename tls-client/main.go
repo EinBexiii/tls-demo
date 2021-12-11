@@ -1,14 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
+	"io"
 	"io/ioutil"
 	"log"
+	"net"
+	"os"
+	"time"
 
 	"github.com/aead/ecdh"
 )
@@ -18,7 +26,8 @@ const (
 	SERVER_CERT_PATH = "/root/certs/cert.crt"
 	PRIV_KEY_PATH    = "/root/certs/clientprivkey.pem"
 
-	HOST = "127.0.0.1:443" // tls server
+	HOST     = "127.0.0.1:443" // tls server
+	UDP_HOST = "127.0.0.1:8080"
 
 	HANDSHAKE_TYPE         = 0x1
 	HANDSHAKE_SUCCESS_TYPE = 0x2
@@ -38,10 +47,20 @@ type HandshakeSuccessPacket struct {
 }
 
 func main() {
-	handshakeSuccess := doHanshake()
 
-	if !handshakeSuccess {
-		return
+	go func() {
+		handshakeSuccess := doHanshake()
+
+		if !handshakeSuccess {
+			return
+		}
+	}()
+
+	time.Sleep(8 * time.Second)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		sendMessage(scanner.Text())
 	}
 
 }
@@ -175,4 +194,78 @@ func decode(dataStructure interface{}, data []byte) error {
 	}
 
 	return nil
+}
+
+func encryptWithKey(secret []byte, plainTextData []byte) (EncryptedData []byte, err error) {
+	block, err := aes.NewCipher(secret)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	EncryptedData = aesgcm.Seal(nil, nonce, plainTextData, nil)
+	EncryptedData = append(EncryptedData, nonce...)
+	return EncryptedData, nil
+}
+
+func decryptWithKey(secret []byte, encryptedData []byte) (plainText []byte, err error) {
+	nonce := encryptedData[len(encryptedData)-12:]
+	encryptedData = encryptedData[:len(encryptedData)-12]
+	block, err := aes.NewCipher(secret)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	plainText, err = aesgcm.Open(nil, nonce, encryptedData, nil)
+	if err != nil {
+		return nil, err
+	}
+	return plainText, nil
+}
+
+func sendMessage(message string) {
+	addr, err := net.ResolveUDPAddr("udp", UDP_HOST)
+
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	connection, err := net.DialUDP("udp", nil, addr)
+
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	defer connection.Close()
+
+	msg := []byte(message)
+
+	encryptedData, err := encryptWithKey(SECRET, msg)
+
+	if err != nil {
+		log.Print(err)
+	}
+
+	_, err = connection.Write(encryptedData)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }

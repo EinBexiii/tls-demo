@@ -3,11 +3,16 @@ package main
 import (
 	"bytes"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/gob"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -20,7 +25,8 @@ const (
 	SERVER_CERT_PATH = "/root/certs/server.crt"
 	PRIV_KEY_PATH    = "/root/certs/server.pem"
 
-	HOST = "127.0.0.1:443" // tls server
+	HOST     = "127.0.0.1:443" // tls server
+	UDP_HOST = "127.0.0.1:8080"
 
 	HANDSHAKE_TYPE         = 0x1
 	HANDSHAKE_SUCCESS_TYPE = 0x2
@@ -40,11 +46,16 @@ type HandshakeSuccessPacket struct {
 }
 
 func main() {
-	err := startTlsServer()
 
-	if err != nil {
-		log.Print("Failed to start TLS-Server: %v", err)
-	}
+	go func() {
+		err := startTlsServer()
+		if err != nil {
+			log.Printf("Failed to start TLS-Server: %v", err)
+			return
+		}
+	}()
+
+	startUdpServer()
 }
 
 func startTlsServer() error {
@@ -190,4 +201,82 @@ func decode(dataStructure interface{}, data []byte) error {
 	}
 
 	return nil
+}
+
+func encryptWithKey(secret []byte, plainTextData []byte) (EncryptedData []byte, err error) {
+	block, err := aes.NewCipher(secret)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	EncryptedData = aesgcm.Seal(nil, nonce, plainTextData, nil)
+	EncryptedData = append(EncryptedData, nonce...)
+	return EncryptedData, nil
+}
+
+func decryptWithKey(secret []byte, encryptedData []byte) (plainText []byte, err error) {
+	nonce := encryptedData[len(encryptedData)-12:]
+	encryptedData = encryptedData[:len(encryptedData)-12]
+	block, err := aes.NewCipher(secret)
+	if err != nil {
+		log.Println(err)
+		return nil, err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	plainText, err = aesgcm.Open(nil, nonce, encryptedData, nil)
+	if err != nil {
+		return nil, err
+	}
+	return plainText, nil
+}
+
+func startUdpServer() {
+	udpAddr, err := net.ResolveUDPAddr("udp4", UDP_HOST)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ln, err := net.ListenUDP("udp", udpAddr)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("UDP server up and listening on port 8080")
+
+	defer ln.Close()
+
+	for {
+		handleUdpConnection(ln)
+	}
+}
+
+func handleUdpConnection(conn *net.UDPConn) {
+
+	buffer := make([]byte, 1024)
+
+	n, _, err := conn.ReadFromUDP(buffer)
+
+	decryptedData, _ := decryptWithKey(SECRET, buffer[:n])
+
+	fmt.Println("Received from UDP client :  " + string(decryptedData))
+
+	if err != nil {
+		log.Fatal(err)
+	}
 }
